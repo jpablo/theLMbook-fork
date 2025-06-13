@@ -2,6 +2,8 @@
 import os  # For file and path operations (check_file_exists, extract_dataset)
 import urllib.request  # For downloading dataset files from URLs
 import tarfile  # For extracting .tar.gz dataset archives
+from typing import Callable, Tuple
+
 import torch  # Main PyTorch library for tensor operations and deep learning
 import torch.nn as nn  # Neural network modules, layers, and utilities
 from torch.utils.data import DataLoader, IterableDataset  # For efficient data loading and streaming
@@ -225,7 +227,7 @@ def extract_dataset(filename):
     return train_path, test_path
 
 
-def create_datasets(train_file, test_file, tokenizer, max_length=30):
+def create_datasets(train_file: str, test_file: str, tokenizer: object, max_length: int = 30) -> tuple[IterableTextDataset, IterableTextDataset]:
     """
     Creates IterableTextDataset objects for training and testing.
     These datasets will stream data from disk instead of loading it all into memory.
@@ -239,9 +241,9 @@ def create_datasets(train_file, test_file, tokenizer, max_length=30):
         tuple: (train_dataset, test_dataset) - Dataset objects for training and testing
     """
     # Create training dataset
-    train_dataset = IterableTextDataset(train_file, tokenizer, max_length)
+    train_dataset: IterableTextDataset = IterableTextDataset(train_file, tokenizer, max_length)
     # Create test dataset
-    test_dataset = IterableTextDataset(test_file, tokenizer, max_length)
+    test_dataset: IterableTextDataset = IterableTextDataset(test_file, tokenizer, max_length)
 
     # Print dataset sizes
     print(f"Training sentences: {len(train_dataset)}")
@@ -250,7 +252,7 @@ def create_datasets(train_file, test_file, tokenizer, max_length=30):
     return train_dataset, test_dataset
 
 
-def create_dataloaders(train_dataset, test_dataset, batch_size, collate_fn):
+def create_dataloaders(train_dataset: IterableTextDataset, test_dataset: IterableTextDataset, batch_size: int, collate_fn: Callable) -> Tuple[DataLoader, DataLoader]:
     """
     Creates DataLoader objects for efficient data iteration.
 
@@ -281,7 +283,7 @@ def create_dataloaders(train_dataset, test_dataset, batch_size, collate_fn):
     return train_dataloader, test_dataloader
 
 
-def download_and_prepare_data(url, batch_size, tokenizer, max_length=30):
+def download_and_prepare_data(url: str, batch_size: int, tokenizer: object, max_length: int = 30) -> Tuple[DataLoader, DataLoader]:
     """
     Main function to handle the complete data preparation pipeline.
     Downloads data, extracts it, and creates necessary dataset objects.
@@ -518,4 +520,4 @@ def get_hyperparameters():
     learning_rate = 0.001  # Learning rate for optimization
     num_epochs = 1  # Number of training epochs
     context_size = 30  # Maximum input sequence length
-    return emb_dim, num_layers, batch_size, learning_rate, num_epochs # , context_size
+    return emb_dim, num_layers, batch_size, learning_rate, num_epochs  # , context_size
