@@ -2,7 +2,8 @@
 import json  # For parsing JSON data
 import random  # For setting seeds and shuffling data
 import gzip  # For decompressing dataset
-from typing import Any
+from typing import Any, List
+from dataclasses import dataclass
 
 import requests  # For downloading dataset from URL
 import torch  # Main PyTorch library
@@ -12,6 +13,13 @@ from transformers.models.gpt2.tokenization_gpt2_fast import GPT2TokenizerFast
 from torch.optim import AdamW  # Optimizer for training
 from tqdm import tqdm  # Progress bar utilities
 import re  # For text normalization
+
+@dataclass
+class TrainingExample:
+    input_ids: List[int]
+    labels: List[int]
+    prompt: str
+    expected_completion: str
 
 
 def set_seed(seed):
@@ -131,12 +139,12 @@ class PromptCompletionDataset(Dataset):
         # Create labels: -100 for prompt (ignored in loss), completion tokens for learning
         labels = [-100] * len(encoded_prompt) + encoded_completion + [eos_token]
 
-        return {
-            "input_ids": input_ids,
-            "labels": labels,
-            "prompt": prompt,
-            "expected_completion": completion
-        }
+        return TrainingExample(
+            input_ids=input_ids,
+            labels=labels,
+            prompt=prompt,
+            expected_completion=completion
+        )
 
 
 def collate_fn(batch):
@@ -151,32 +159,32 @@ def collate_fn(batch):
         tuple: (input_ids, attention_mask, labels, prompts, expected_completions)
     """
     # Find the longest sequence in the batch for padding
-    max_length = max(len(item["input_ids"]) for item in batch)
+    max_length = max(len(item.input_ids) for item in batch)
 
     # Pad input sequences to max_length with pad token
     input_ids = [
-        item["input_ids"] +
-        [tokenizer.pad_token_id] * (max_length - len(item["input_ids"]))
+        item.input_ids +
+        [tokenizer.pad_token_id] * (max_length - len(item.input_ids))
         for item in batch
     ]
 
     # Pad label sequences with -100 (ignored in loss calculation)
     labels = [
-        item["labels"] +
-        [-100] * (max_length - len(item["labels"]))
+        item.labels +
+        [-100] * (max_length - len(item.labels))
         for item in batch
     ]
 
     # Create attention masks: 1 for real tokens, 0 for padding
     attention_mask = [
-        [1] * len(item["input_ids"]) +
-        [0] * (max_length - len(item["input_ids"]))
+        [1] * len(item.input_ids) +
+        [0] * (max_length - len(item.input_ids))
         for item in batch
     ]
 
     # Keep original prompts and completions for evaluation
-    prompts = [item["prompt"] for item in batch]
-    expected_completions = [item["expected_completion"] for item in batch]
+    prompts = [item.prompt for item in batch]
+    expected_completions = [item.expected_completion for item in batch]
 
     # Convert everything to PyTorch tensors except text
     return (
