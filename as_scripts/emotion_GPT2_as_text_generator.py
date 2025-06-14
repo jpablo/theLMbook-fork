@@ -16,6 +16,11 @@ import re  # For text normalization
 
 
 @dataclass
+class DataEntry:
+    prompt: str
+    completion: str
+
+@dataclass
 class TrainingExample:
     input_ids: list[int]
     labels: list[int]
@@ -95,7 +100,7 @@ def decode_text(tokenizer: GPT2TokenizerFast, token_ids: list[int]):
     return tokenizer.decode(token_ids, skip_special_tokens=True)
 
 
-class PromptCompletionDataset(Dataset):
+class PromptCompletionDataset(Dataset[TrainingExample]):
     """
     PyTorch Dataset for prompt-completion pairs.
     Handles the conversion of text data into model-ready format.
@@ -105,7 +110,7 @@ class PromptCompletionDataset(Dataset):
         tokenizer: Hugging Face tokenizer
     """
 
-    def __init__(self, data: list[dict], tokenizer: GPT2TokenizerFast):
+    def __init__(self, data: list[DataEntry], tokenizer: GPT2TokenizerFast):
         # Store the raw data and tokenizer for later use
         self.data = data
         self.tokenizer = tokenizer
@@ -114,7 +119,7 @@ class PromptCompletionDataset(Dataset):
         # Return the total number of examples in the dataset
         return len(self.data)
 
-    def __getitem__(self, idx: slice | int) -> dict:
+    def __getitem__(self, idx: int) -> TrainingExample:
         """
             Returns a single training example.
 
@@ -126,8 +131,8 @@ class PromptCompletionDataset(Dataset):
             """
         # Get the specific example from our dataset
         item = self.data[idx]
-        prompt: str = item["prompt"]
-        completion: str = item["completion"]
+        prompt: str = item.prompt
+        completion: str = item.completion
 
         # Convert text to token IDs for both prompt and completion
         encoded_prompt = encode_text(self.tokenizer, prompt)
@@ -334,12 +339,12 @@ def download_and_prepare_data(data_url: str, tokenizer: GPT2TokenizerFast, batch
     content = gzip.decompress(response.content).decode()
 
     # Parse each line as JSON and format into prompt-completion pairs
-    dataset: list[dict] = []
+    dataset: list[DataEntry] = []
     for entry in map(json.loads, content.splitlines()):
-        dataset.append({
-            "prompt": build_prompt(entry['text']),
-            "completion": entry["label"].strip()
-        })
+        dataset.append(DataEntry(
+            prompt=build_prompt(entry['text']),
+            completion=entry["label"].strip()
+        ))
 
     # Randomly shuffle dataset for better split
     random.shuffle(dataset)
