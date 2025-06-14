@@ -15,6 +15,8 @@ from transformers.tokenization_utils_base import BatchEncoding
 from torch.optim import AdamW  # Optimizer for training
 from tqdm import tqdm  # Progress bar utilities
 import re  # For text normalization
+import mlflow  # For experiment tracking and model management
+import mlflow.pytorch  # For PyTorch model logging
 
 
 @dataclass
@@ -417,6 +419,10 @@ def get_hyperparameters() -> tuple[int, int, float]:
 def main():
     # Set random seeds for reproducibility
     set_seed(42)
+    
+    # Setup MLflow tracking
+    mlflow.set_tracking_uri("http://127.0.0.1:5000")
+    mlflow.set_experiment("GPT2-Emotion-Classification")
 
     # Configure basic training parameters
     data_url = "https://www.thelmbook.com/data/emotions"
@@ -440,58 +446,98 @@ def main():
 
     # Initialize optimizer with learning rate
     optimizer = AdamW(model.parameters(), lr=learning_rate)
+    
+    # Start MLflow run
+    with mlflow.start_run():
+        # Log hyperparameters
+        mlflow.log_param("model_name", model_name)
+        mlflow.log_param("num_epochs", num_epochs)
+        mlflow.log_param("batch_size", batch_size)
+        mlflow.log_param("learning_rate", learning_rate)
+        mlflow.log_param("device", str(device))
+        mlflow.log_param("seed", 42)
+        mlflow.log_param("train_size", len(train_loader.dataset))
+        mlflow.log_param("test_size", len(test_loader.dataset))
 
-    # Training loop
-    for epoch in range(num_epochs):
-        # Initialize epoch metrics
-        total_loss = 0
-        num_batches = 0
-        # Create progress bar for this epoch
-        progress_bar: tqdm = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")
+        # Training loop
+        for epoch in range(num_epochs):
+            # Initialize epoch metrics
+            total_loss = 0
+            num_batches = 0
+            # Create progress bar for this epoch
+            progress_bar: tqdm = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")
 
-        # Process each batch
-        for input_ids, attention_mask, labels, _, _ in progress_bar:
-            # Move batch data to appropriate device
-            input_ids = input_ids.to(device)
-            attention_mask = attention_mask.to(device)
-            labels = labels.to(device)
+            # Process each batch
+            for input_ids, attention_mask, labels, _, _ in progress_bar:
+                # Move batch data to appropriate device
+                input_ids = input_ids.to(device)
+                attention_mask = attention_mask.to(device)
+                labels = labels.to(device)
 
-            # Forward pass with loss calculation
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels
-            )
-            loss = outputs.loss
+                # Forward pass with loss calculation
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels
+                )
+                loss = outputs.loss
 
-            # Backward pass and optimization
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
+                # Backward pass and optimization
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
 
-            # Update progress metrics
-            total_loss += loss.item()
-            num_batches += 1
+                # Update progress metrics
+                total_loss += loss.item()
+                num_batches += 1
 
-            # Update progress bar with current loss
-            progress_bar.set_postfix({"Loss": total_loss / num_batches})
+                # Calculate current average loss
+                current_avg_loss = total_loss / num_batches
+                
+                # Update progress bar with current loss
+                progress_bar.set_postfix({"Loss": current_avg_loss})
+                
+                # Log batch-level loss to MLflow for granular tracking
+                global_step = epoch * len(train_loader) + num_batches
+                mlflow.log_metric("batch_loss", loss.item(), step=global_step)
+                mlflow.log_metric("running_avg_loss", current_avg_loss, step=global_step)
 
-        # Calculate and display epoch metrics
-        avg_loss = total_loss / num_batches
-        test_acc = calculate_accuracy(model, tokenizer, test_loader)
-        print(f"Epoch {epoch + 1} - Average loss: {avg_loss:.4f}, Test accuracy: {test_acc:.4f}")
+            # Calculate and display epoch metrics
+            avg_loss = total_loss / num_batches
+            test_acc = calculate_accuracy(model, tokenizer, test_loader)
+            print(f"Epoch {epoch + 1} - Average loss: {avg_loss:.4f}, Test accuracy: {test_acc:.4f}")
+            
+            # Log metrics to MLflow
+            mlflow.log_metric("train_loss", avg_loss, step=epoch)
+            mlflow.log_metric("test_accuracy", test_acc, step=epoch)
 
-    # Calculate final model performance
-    train_acc = calculate_accuracy(model, tokenizer, train_loader)
-    print(f"Training accuracy: {train_acc:.4f}")
-    print(f"Test accuracy: {test_acc:.4f}")
+        # Calculate final model performance
+        train_acc = calculate_accuracy(model, tokenizer, train_loader)
+        print(f"Training accuracy: {train_acc:.4f}")
+        print(f"Test accuracy: {test_acc:.4f}")
+        
+        # Log final metrics
+        mlflow.log_metric("final_train_accuracy", train_acc)
+        mlflow.log_metric("final_test_accuracy", test_acc)
 
-    # Save the trained model and tokenizer
-    model.save_pretrained("./finetuned_model")
-    tokenizer.save_pretrained("./finetuned_model")
-    # Test model with a sample input
-    test_input = "I'm so happy to be able to finetune an LLM!"
-    test_model("./finetuned_model", test_input)
+        # Save the trained model and tokenizer
+        model_path = "./finetuned_model"
+        model.save_pretrained(model_path)
+        tokenizer.save_pretrained(model_path)
+        
+        # Log model as MLflow artifact
+        mlflow.pytorch.log_model(
+            pytorch_model=model,
+            artifact_path="model",
+            registered_model_name="GPT2-Emotion-Classifier"
+        )
+        
+        # Log model files as artifacts
+        mlflow.log_artifacts(model_path, "model_files")
+        
+        # Test model with a sample input
+        test_input = "I'm so happy to be able to finetune an LLM!"
+        test_model(model_path, test_input)
 
 
 if __name__ == "__main__":
