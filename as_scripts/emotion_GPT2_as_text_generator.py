@@ -20,6 +20,7 @@ class DataEntry:
     prompt: str
     completion: str
 
+
 @dataclass
 class TrainingExample:
     input_ids: list[int]
@@ -341,10 +342,12 @@ def download_and_prepare_data(data_url: str, tokenizer: GPT2TokenizerFast, batch
     # Parse each line as JSON and format into prompt-completion pairs
     dataset: list[DataEntry] = []
     for entry in map(json.loads, content.splitlines()):
-        dataset.append(DataEntry(
-            prompt=build_prompt(entry['text']),
-            completion=entry["label"].strip()
-        ))
+        dataset.append(
+            DataEntry(
+                prompt=build_prompt(entry['text']),
+                completion=entry["label"].strip()
+            )
+        )
 
     # Randomly shuffle dataset for better split
     random.shuffle(dataset)
@@ -359,13 +362,13 @@ def download_and_prepare_data(data_url: str, tokenizer: GPT2TokenizerFast, batch
     test_dataset = PromptCompletionDataset(test_data, tokenizer)
 
     # Create data loaders with appropriate settings
-    train_loader = DataLoader(
+    train_loader = DataLoader[TrainingExample](
         train_dataset,
         batch_size=batch_size,
         shuffle=True,  # Shuffle training data
         collate_fn=collate_fn  # Custom collation for padding
     )
-    test_loader = DataLoader(
+    test_loader = DataLoader[TrainingExample](
         test_dataset,
         batch_size=batch_size,
         shuffle=False,  # Don't shuffle test data
