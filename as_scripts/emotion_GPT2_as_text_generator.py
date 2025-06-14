@@ -2,7 +2,7 @@
 import json  # For parsing JSON data
 import random  # For setting seeds and shuffling data
 import gzip  # For decompressing dataset
-from typing import Any, List
+from typing import Any
 from dataclasses import dataclass
 
 import requests  # For downloading dataset from URL
@@ -14,10 +14,11 @@ from torch.optim import AdamW  # Optimizer for training
 from tqdm import tqdm  # Progress bar utilities
 import re  # For text normalization
 
+
 @dataclass
 class TrainingExample:
-    input_ids: List[int]
-    labels: List[int]
+    input_ids: list[int]
+    labels: list[int]
     prompt: str
     expected_completion: str
 
