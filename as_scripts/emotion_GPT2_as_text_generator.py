@@ -156,53 +156,65 @@ class PromptCompletionDataset(Dataset[TrainingExample]):
         )
 
 
-def collate_fn(batch: list[TrainingExample]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[str]]:
+def create_collate_fn(tokenizer: GPT2TokenizerFast):
     """
-    Collates batch of examples into training-ready format.
-    Handles padding and conversion to tensors.
-
+    Creates a collate function with access to the tokenizer.
+    
     Args:
-        batch: List of examples from Dataset
-
+        tokenizer: The tokenizer to use for padding
+    
     Returns:
-        tuple: (input_ids, attention_mask, labels, prompts, expected_completions)
+        A collate function that can be used with DataLoader
     """
-    # Find the longest sequence in the batch for padding
-    max_length = max(len(item.input_ids) for item in batch)
+    def collate_fn(batch: list[TrainingExample]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[str]]:
+        """
+        Collates batch of examples into training-ready format.
+        Handles padding and conversion to tensors.
 
-    # Pad input sequences to max_length with pad token
-    input_ids = [
-        item.input_ids +
-        [tokenizer.pad_token_id] * (max_length - len(item.input_ids))
-        for item in batch
-    ]
+        Args:
+            batch: List of examples from Dataset
 
-    # Pad label sequences with -100 (ignored in loss calculation)
-    labels = [
-        item.labels +
-        [-100] * (max_length - len(item.labels))
-        for item in batch
-    ]
+        Returns:
+            tuple: (input_ids, attention_mask, labels, prompts, expected_completions)
+        """
+        # Find the longest sequence in the batch for padding
+        max_length = max(len(item.input_ids) for item in batch)
 
-    # Create attention masks: 1 for real tokens, 0 for padding
-    attention_mask = [
-        [1] * len(item.input_ids) +
-        [0] * (max_length - len(item.input_ids))
-        for item in batch
-    ]
+        # Pad input sequences to max_length with pad token
+        input_ids = [
+            item.input_ids +
+            [tokenizer.pad_token_id] * (max_length - len(item.input_ids))
+            for item in batch
+        ]
 
-    # Keep original prompts and completions for evaluation
-    prompts = [item.prompt for item in batch]
-    expected_completions = [item.expected_completion for item in batch]
+        # Pad label sequences with -100 (ignored in loss calculation)
+        labels = [
+            item.labels +
+            [-100] * (max_length - len(item.labels))
+            for item in batch
+        ]
 
-    # Convert everything to PyTorch tensors except text
-    return (
-        torch.tensor(input_ids),
-        torch.tensor(attention_mask),
-        torch.tensor(labels),
-        prompts,
-        expected_completions
-    )
+        # Create attention masks: 1 for real tokens, 0 for padding
+        attention_mask = [
+            [1] * len(item.input_ids) +
+            [0] * (max_length - len(item.input_ids))
+            for item in batch
+        ]
+
+        # Keep original prompts and completions for evaluation
+        prompts = [item.prompt for item in batch]
+        expected_completions = [item.expected_completion for item in batch]
+
+        # Convert everything to PyTorch tensors except text
+        return (
+            torch.tensor(input_ids),
+            torch.tensor(attention_mask),
+            torch.tensor(labels),
+            prompts,
+            expected_completions
+        )
+    
+    return collate_fn
 
 
 def normalize_text(text):
@@ -293,7 +305,7 @@ def generate_text(model: GPT2LMHeadModel, tokenizer: GPT2TokenizerFast, prompt: 
     return generated_text.strip()
 
 
-def test_model(model_path, test_input):
+def test_model(model_path: str, test_input: str):
     """
     Tests a saved model on a single input.
 
@@ -306,8 +318,8 @@ def test_model(model_path, test_input):
     print(f"Using device: {device}")
 
     # Load saved model and move to appropriate device
-    model = AutoModelForCausalLM.from_pretrained(model_path).to(device)
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    model: GPT2LMHeadModel = AutoModelForCausalLM.from_pretrained(model_path).to(device)
+    tokenizer: GPT2TokenizerFast = AutoTokenizer.from_pretrained(model_path)
 
     # Ensure model has proper padding token configuration
     if tokenizer.pad_token is None:
@@ -364,6 +376,9 @@ def download_and_prepare_data(data_url: str, tokenizer: GPT2TokenizerFast, batch
     train_dataset = PromptCompletionDataset(train_data, tokenizer)
     test_dataset = PromptCompletionDataset(test_data, tokenizer)
 
+    # Create collate function with tokenizer access
+    collate_fn = create_collate_fn(tokenizer)
+    
     # Create data loaders with appropriate settings
     train_loader = DataLoader[TrainingExample](
         train_dataset,
@@ -399,7 +414,7 @@ def get_hyperparameters() -> tuple[int, int, float]:
 
 
 # Main training script
-if __name__ == "__main__":
+def main():
     # Set random seeds for reproducibility
     set_seed(42)
 
@@ -472,9 +487,13 @@ if __name__ == "__main__":
     print(f"Test accuracy: {test_acc:.4f}")
 
     # Save the trained model and tokenizer
-    # model.save_pretrained("./finetuned_model")
-    # tokenizer.save_pretrained("./finetuned_model")
-
+    model.save_pretrained("./finetuned_model")
+    tokenizer.save_pretrained("./finetuned_model")
     # Test model with a sample input
     test_input = "I'm so happy to be able to finetune an LLM!"
     test_model("./finetuned_model", test_input)
+
+
+if __name__ == "__main__":
+    main()
+    # test_model("./finetuned_model", "What time is it?")
