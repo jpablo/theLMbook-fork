@@ -2,7 +2,7 @@
 import json  # For parsing JSON data
 import random  # For setting seeds and shuffling data
 import gzip  # For decompressing dataset
-from typing import Any
+from typing import Any, Tuple
 from dataclasses import dataclass
 
 import requests  # For downloading dataset from URL
@@ -10,6 +10,8 @@ import torch  # Main PyTorch library
 from torch.utils.data import Dataset, DataLoader  # For dataset handling
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerFast  # Hugging Face model components
 from transformers.models.gpt2.tokenization_gpt2_fast import GPT2TokenizerFast
+from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel
+from transformers.tokenization_utils_base import BatchEncoding
 from torch.optim import AdamW  # Optimizer for training
 from tqdm import tqdm  # Progress bar utilities
 import re  # For text normalization
@@ -154,7 +156,7 @@ class PromptCompletionDataset(Dataset[TrainingExample]):
         )
 
 
-def collate_fn(batch):
+def collate_fn(batch: list[TrainingExample]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[str]]:
     """
     Collates batch of examples into training-ready format.
     Handles padding and conversion to tensors.
@@ -220,7 +222,7 @@ def normalize_text(text):
     return text
 
 
-def calculate_accuracy(model, tokenizer, loader):
+def calculate_accuracy(model: GPT2LMHeadModel, tokenizer: GPT2TokenizerFast, loader: DataLoader[TrainingExample]):
     """
     Calculates prediction accuracy on a dataset.
 
@@ -258,7 +260,7 @@ def calculate_accuracy(model, tokenizer, loader):
     return accuracy
 
 
-def generate_text(model, tokenizer, prompt, max_new_tokens=50):
+def generate_text(model: GPT2LMHeadModel, tokenizer: GPT2TokenizerFast, prompt: str, max_new_tokens: int = 50) -> str:
     """
     Generates text completion for a given prompt.
 
@@ -272,12 +274,12 @@ def generate_text(model, tokenizer, prompt, max_new_tokens=50):
         str: Generated completion
     """
     # Encode prompt and move to model's device
-    input_ids = tokenizer(prompt, return_tensors="pt").to(model.device)
+    encoding: BatchEncoding = tokenizer(prompt, return_tensors="pt").to(model.device)
 
     # Generate completion using model
     output_ids = model.generate(
-        input_ids=input_ids["input_ids"],
-        attention_mask=input_ids["attention_mask"],
+        input_ids=encoding["input_ids"],
+        attention_mask=encoding["attention_mask"],
         max_new_tokens=max_new_tokens,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
@@ -287,7 +289,7 @@ def generate_text(model, tokenizer, prompt, max_new_tokens=50):
     )[0]
 
     # Extract and decode only the generated part (excluding prompt)
-    generated_text = decode_text(tokenizer, output_ids[input_ids["input_ids"].shape[1]:])
+    generated_text = decode_text(tokenizer, output_ids[encoding["input_ids"].shape[1]:])
     return generated_text.strip()
 
 
@@ -321,7 +323,8 @@ def test_model(model_path, test_input):
     print(f"Generated emotion: {generated_text}")
 
 
-def download_and_prepare_data(data_url: str, tokenizer: GPT2TokenizerFast, batch_size: int, test_ratio: float = 0.1) -> tuple[DataLoader, DataLoader]:
+def download_and_prepare_data(data_url: str, tokenizer: GPT2TokenizerFast, batch_size: int, test_ratio: float = 0.1) \
+        -> tuple[DataLoader[TrainingExample], DataLoader[TrainingExample]]:
     """
     Downloads and prepares dataset for training.
 
@@ -412,7 +415,7 @@ if __name__ == "__main__":
     tokenizer.pad_token = tokenizer.eos_token
 
     # Load pre-trained model and move to appropriate device
-    model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+    model: GPT2LMHeadModel = AutoModelForCausalLM.from_pretrained(model_name).to(device)
 
     # Get training hyperparameters
     num_epochs, batch_size, learning_rate = get_hyperparameters()
@@ -429,7 +432,7 @@ if __name__ == "__main__":
         total_loss = 0
         num_batches = 0
         # Create progress bar for this epoch
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")
+        progress_bar: tqdm = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")
 
         # Process each batch
         for input_ids, attention_mask, labels, _, _ in progress_bar:
