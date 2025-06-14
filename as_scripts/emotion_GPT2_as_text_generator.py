@@ -31,7 +31,7 @@ class TrainingExample:
     expected_completion: str
 
 
-def set_seed(seed):
+def set_seed(seed: int):
     """
     Sets random seeds for reproducibility across different libraries.
 
@@ -159,10 +159,10 @@ class PromptCompletionDataset(Dataset[TrainingExample]):
 def create_collate_fn(tokenizer: GPT2TokenizerFast):
     """
     Creates a collate function with access to the tokenizer.
-    
+
     Args:
         tokenizer: The tokenizer to use for padding
-    
+
     Returns:
         A collate function that can be used with DataLoader
     """
@@ -213,7 +213,7 @@ def create_collate_fn(tokenizer: GPT2TokenizerFast):
             prompts,
             expected_completions
         )
-    
+
     return collate_fn
 
 
@@ -378,7 +378,7 @@ def download_and_prepare_data(data_url: str, tokenizer: GPT2TokenizerFast, batch
 
     # Create collate function with tokenizer access
     collate_fn = create_collate_fn(tokenizer)
-    
+
     # Create data loaders with appropriate settings
     train_loader = DataLoader[TrainingExample](
         train_dataset,
