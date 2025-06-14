@@ -1,14 +1,18 @@
 # Import required libraries
-import json             # For parsing JSON data
-import random          # For setting seeds and shuffling data
-import gzip            # For decompressing dataset
-import requests        # For downloading dataset from URL
-import torch           # Main PyTorch library
+import json  # For parsing JSON data
+import random  # For setting seeds and shuffling data
+import gzip  # For decompressing dataset
+from typing import Any
+
+import requests  # For downloading dataset from URL
+import torch  # Main PyTorch library
 from torch.utils.data import Dataset, DataLoader  # For dataset handling
-from transformers import AutoTokenizer, AutoModelForCausalLM  # Hugging Face model components
-from torch.optim import AdamW    # Optimizer for training
-from tqdm import tqdm   # Progress bar utilities
-import re              # For text normalization
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerFast  # Hugging Face model components
+from transformers.models.gpt2.tokenization_gpt2_fast import GPT2TokenizerFast
+from torch.optim import AdamW  # Optimizer for training
+from tqdm import tqdm  # Progress bar utilities
+import re  # For text normalization
+
 
 def set_seed(seed):
     """
@@ -29,6 +33,7 @@ def set_seed(seed):
     # Disable cuDNN's auto-tuner for consistent behavior
     torch.backends.cudnn.benchmark = False
 
+
 def build_prompt(text):
     """
     Creates a standardized prompt for emotion classification.
@@ -43,7 +48,8 @@ def build_prompt(text):
     # Include explicit task instruction and expected output format
     return f"Predict the emotion for the following text: {text}\nEmotion:"
 
-def encode_text(tokenizer, text, return_tensor=False):
+
+def encode_text(tokenizer: GPT2TokenizerFast, text: str, return_tensor: object = False) -> list[int]:
     """
     Encodes text using the provided tokenizer.
 
@@ -64,7 +70,8 @@ def encode_text(tokenizer, text, return_tensor=False):
     else:
         return tokenizer.encode(text, add_special_tokens=False)
 
-def decode_text(tokenizer, token_ids):
+
+def decode_text(tokenizer: GPT2TokenizerFast, token_ids: list[int]):
     """
     Decodes token IDs back to text.
 
@@ -78,6 +85,7 @@ def decode_text(tokenizer, token_ids):
     # Convert token IDs back to text, skipping special tokens
     return tokenizer.decode(token_ids, skip_special_tokens=True)
 
+
 class PromptCompletionDataset(Dataset):
     """
     PyTorch Dataset for prompt-completion pairs.
@@ -87,7 +95,8 @@ class PromptCompletionDataset(Dataset):
         data (list): List of dictionaries containing prompts and completions
         tokenizer: Hugging Face tokenizer
     """
-    def __init__(self, data, tokenizer):
+
+    def __init__(self, data: list[dict], tokenizer: GPT2TokenizerFast):
         # Store the raw data and tokenizer for later use
         self.data = data
         self.tokenizer = tokenizer
@@ -96,20 +105,20 @@ class PromptCompletionDataset(Dataset):
         # Return the total number of examples in the dataset
         return len(self.data)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: slice | int) -> dict:
         """
-        Returns a single training example.
+            Returns a single training example.
 
-        Args:
-            idx (int): Index of the example to fetch
+            Args:
+                idx (int): Index of the example to fetch
 
-        Returns:
-            dict: Contains input_ids, labels, prompt, and expected completion
-        """
+            Returns:
+                dict: Contains input_ids, labels, prompt, and expected completion
+            """
         # Get the specific example from our dataset
         item = self.data[idx]
-        prompt = item["prompt"]
-        completion = item["completion"]
+        prompt: str = item["prompt"]
+        completion: str = item["completion"]
 
         # Convert text to token IDs for both prompt and completion
         encoded_prompt = encode_text(self.tokenizer, prompt)
@@ -128,6 +137,7 @@ class PromptCompletionDataset(Dataset):
             "prompt": prompt,
             "expected_completion": completion
         }
+
 
 def collate_fn(batch):
     """
@@ -177,6 +187,7 @@ def collate_fn(batch):
         expected_completions
     )
 
+
 def normalize_text(text):
     """
     Normalizes text for consistent comparison.
@@ -192,6 +203,7 @@ def normalize_text(text):
     # Replace multiple whitespace characters with single space
     text = re.sub(r'\s+', ' ', text)
     return text
+
 
 def calculate_accuracy(model, tokenizer, loader):
     """
@@ -230,6 +242,7 @@ def calculate_accuracy(model, tokenizer, loader):
     model.train()
     return accuracy
 
+
 def generate_text(model, tokenizer, prompt, max_new_tokens=50):
     """
     Generates text completion for a given prompt.
@@ -253,14 +266,15 @@ def generate_text(model, tokenizer, prompt, max_new_tokens=50):
         max_new_tokens=max_new_tokens,
         pad_token_id=tokenizer.pad_token_id,
         eos_token_id=tokenizer.eos_token_id,
-        use_cache=True,        # Use KV cache for faster generation
-        num_beams=1,           # Use greedy decoding
-        do_sample=False,       # Don't use sampling
+        use_cache=True,  # Use KV cache for faster generation
+        num_beams=1,  # Use greedy decoding
+        do_sample=False,  # Don't use sampling
     )[0]
 
     # Extract and decode only the generated part (excluding prompt)
     generated_text = decode_text(tokenizer, output_ids[input_ids["input_ids"].shape[1]:])
     return generated_text.strip()
+
 
 def test_model(model_path, test_input):
     """
@@ -291,7 +305,8 @@ def test_model(model_path, test_input):
     print(f"Input: {test_input}")
     print(f"Generated emotion: {generated_text}")
 
-def download_and_prepare_data(data_url, tokenizer, batch_size, test_ratio=0.1):
+
+def download_and_prepare_data(data_url: str, tokenizer: GPT2TokenizerFast, batch_size: int, test_ratio: float = 0.1) -> tuple[DataLoader, DataLoader]:
     """
     Downloads and prepares dataset for training.
 
@@ -310,7 +325,7 @@ def download_and_prepare_data(data_url, tokenizer, batch_size, test_ratio=0.1):
     content = gzip.decompress(response.content).decode()
 
     # Parse each line as JSON and format into prompt-completion pairs
-    dataset = []
+    dataset: list[dict] = []
     for entry in map(json.loads, content.splitlines()):
         dataset.append({
             "prompt": build_prompt(entry['text']),
@@ -333,19 +348,20 @@ def download_and_prepare_data(data_url, tokenizer, batch_size, test_ratio=0.1):
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,         # Shuffle training data
+        shuffle=True,  # Shuffle training data
         collate_fn=collate_fn  # Custom collation for padding
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
-        shuffle=False,        # Don't shuffle test data
+        shuffle=False,  # Don't shuffle test data
         collate_fn=collate_fn
     )
 
     return train_loader, test_loader
 
-def get_hyperparameters():
+
+def get_hyperparameters() -> tuple[int, int, float]:
     """
     Returns training hyperparameters.
 
@@ -361,6 +377,7 @@ def get_hyperparameters():
 
     return num_epochs, batch_size, learning_rate
 
+
 # Main training script
 if __name__ == "__main__":
     # Set random seeds for reproducibility
@@ -373,7 +390,8 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # Initialize tokenizer and configure padding token
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    tokenizer: GPT2TokenizerFast = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
 
     # Load pre-trained model and move to appropriate device
@@ -394,7 +412,7 @@ if __name__ == "__main__":
         total_loss = 0
         num_batches = 0
         # Create progress bar for this epoch
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")
 
         # Process each batch
         for input_ids, attention_mask, labels, _, _ in progress_bar:
@@ -426,7 +444,7 @@ if __name__ == "__main__":
         # Calculate and display epoch metrics
         avg_loss = total_loss / num_batches
         test_acc = calculate_accuracy(model, tokenizer, test_loader)
-        print(f"Epoch {epoch+1} - Average loss: {avg_loss:.4f}, Test accuracy: {test_acc:.4f}")
+        print(f"Epoch {epoch + 1} - Average loss: {avg_loss:.4f}, Test accuracy: {test_acc:.4f}")
 
     # Calculate final model performance
     train_acc = calculate_accuracy(model, tokenizer, train_loader)
@@ -434,8 +452,8 @@ if __name__ == "__main__":
     print(f"Test accuracy: {test_acc:.4f}")
 
     # Save the trained model and tokenizer
-    model.save_pretrained("./finetuned_model")
-    tokenizer.save_pretrained("./finetuned_model")
+    # model.save_pretrained("./finetuned_model")
+    # tokenizer.save_pretrained("./finetuned_model")
 
     # Test model with a sample input
     test_input = "I'm so happy to be able to finetune an LLM!"
