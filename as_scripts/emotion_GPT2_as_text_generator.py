@@ -168,6 +168,7 @@ def create_collate_fn(tokenizer: GPT2TokenizerFast):
     Returns:
         A collate function that can be used with DataLoader
     """
+
     def collate_fn(batch: list[TrainingExample]) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str], list[str]]:
         """
         Collates batch of examples into training-ready format.
@@ -236,7 +237,7 @@ def normalize_text(text):
     return text
 
 
-def calculate_accuracy(model: GPT2LMHeadModel, tokenizer: GPT2TokenizerFast, loader: DataLoader[TrainingExample]):
+def calculate_accuracy(model: GPT2LMHeadModel, tokenizer: GPT2TokenizerFast, loader: DataLoader[TrainingExample], tag: str = ""):
     """
     Calculates prediction accuracy on a dataset.
 
@@ -247,7 +248,9 @@ def calculate_accuracy(model: GPT2LMHeadModel, tokenizer: GPT2TokenizerFast, loa
 
     Returns:
         float: Accuracy score
+        :param tag:
     """
+    print(f"Calculating accuracy for {tag} dataset...")
     # Set model to evaluation mode (disables dropout, etc.)
     model.eval()
     # Initialize counters for accuracy calculation
@@ -265,6 +268,7 @@ def calculate_accuracy(model: GPT2LMHeadModel, tokenizer: GPT2TokenizerFast, loa
                 # Compare normalized versions of prediction and expected completion
                 if normalize_text(generated_text) == normalize_text(expected_completion):
                     correct += 1
+                mlflow.log_metric(f"{tag}: accuracy", correct / (total + 1), step=total)
                 total += 1
 
     # Calculate accuracy, handling empty dataset case
@@ -416,10 +420,10 @@ def get_hyperparameters() -> tuple[int, int, float]:
 
 
 # Main training script
-def main():
+def train():
     # Set random seeds for reproducibility
     set_seed(42)
-    
+
     # Setup MLflow tracking
     mlflow.set_tracking_uri("http://127.0.0.1:5000")
     mlflow.set_experiment("GPT2-Emotion-Classification")
@@ -446,8 +450,9 @@ def main():
 
     # Initialize optimizer with learning rate
     optimizer = AdamW(model.parameters(), lr=learning_rate)
-    
-    # Start MLflow run
+
+    mlflow.enable_system_metrics_logging()
+
     with mlflow.start_run():
         # Log hyperparameters
         mlflow.log_param("model_name", model_name)
@@ -493,10 +498,10 @@ def main():
 
                 # Calculate current average loss
                 current_avg_loss = total_loss / num_batches
-                
+
                 # Update progress bar with current loss
                 progress_bar.set_postfix({"Loss": current_avg_loss})
-                
+
                 # Log batch-level loss to MLflow for granular tracking
                 global_step = epoch * len(train_loader) + num_batches
                 mlflow.log_metric("batch_loss", loss.item(), step=global_step)
@@ -504,18 +509,18 @@ def main():
 
             # Calculate and display epoch metrics
             avg_loss = total_loss / num_batches
-            test_acc = calculate_accuracy(model, tokenizer, test_loader)
+            test_acc = calculate_accuracy(model, tokenizer, test_loader, f"Epoc {epoch + 1}")
             print(f"Epoch {epoch + 1} - Average loss: {avg_loss:.4f}, Test accuracy: {test_acc:.4f}")
-            
+
             # Log metrics to MLflow
             mlflow.log_metric("train_loss", avg_loss, step=epoch)
             mlflow.log_metric("test_accuracy", test_acc, step=epoch)
 
         # Calculate final model performance
-        train_acc = calculate_accuracy(model, tokenizer, train_loader)
+        train_acc = calculate_accuracy(model, tokenizer, train_loader, "Final")
         print(f"Training accuracy: {train_acc:.4f}")
         print(f"Test accuracy: {test_acc:.4f}")
-        
+
         # Log final metrics
         mlflow.log_metric("final_train_accuracy", train_acc)
         mlflow.log_metric("final_test_accuracy", test_acc)
@@ -524,22 +529,38 @@ def main():
         model_path = "./finetuned_model"
         model.save_pretrained(model_path)
         tokenizer.save_pretrained(model_path)
-        
+
         # Log model as MLflow artifact
         mlflow.pytorch.log_model(
             pytorch_model=model,
-            artifact_path="model",
-            registered_model_name="GPT2-Emotion-Classifier"
+            artifact_path="model"
         )
-        
+
         # Log model files as artifacts
         mlflow.log_artifacts(model_path, "model_files")
-        
+
         # Test model with a sample input
         test_input = "I'm so happy to be able to finetune an LLM!"
         test_model(model_path, test_input)
 
 
+def load_model(model_path: str) -> GPT2LMHeadModel:
+    device = torch.device("mps" if torch.mps.is_available() else "cpu")
+
+    return AutoModelForCausalLM.from_pretrained(model_path).to(device)
+
+
+def mlflow_log_model(model: GPT2LMHeadModel, model_path: str):
+    mlflow.pytorch.log_model(pytorch_model=model, artifact_path="model")
+    mlflow.log_artifacts(model_path, "model_files")
+
+
 if __name__ == "__main__":
-    main()
+    # train()
     # test_model("./finetuned_model", "What time is it?")
+    mlflow.set_tracking_uri("http://127.0.0.1:5000")
+    mlflow.set_experiment("GPT2-Emotion-Classification")
+    model_path = "./finetuned_model"
+    with mlflow.start_run(run_name="brawny-worm-494"):
+        model = load_model(model_path)
+        mlflow_log_model(model, model_path)
