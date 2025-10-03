@@ -10,12 +10,12 @@ class RMSNorm(nn.Module):
     A simplified alternative to Layer Normalization that only uses RMS statistics
     """
 
-    def __init__(self, emb_dim, epsilon=1e-8):
+    def __init__(self, emb_dim: int, epsilon: float = 1e-8) -> None:
         super().__init__()
         self.scale = nn.Parameter(torch.ones(emb_dim))  # Learnable scale parameter
         self.epsilon = epsilon  # Small constant for numerical stability
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Compute root mean square normalization
         squared_x = x ** 2
         mean_squared = torch.mean(squared_x, dim=-1, keepdim=True)
@@ -28,14 +28,14 @@ class RMSNorm(nn.Module):
 
 
 class AttentionHead(nn.Module):
-    def __init__(self, emb_dim: int, d_h: int):
+    def __init__(self, emb_dim: int, d_h: int) -> None:
         super().__init__()
         self.W_Q = nn.Parameter(torch.empty(emb_dim, d_h))
         self.W_K = nn.Parameter(torch.empty(emb_dim, d_h))
         self.W_V = nn.Parameter(torch.empty(emb_dim, d_h))
-        self.d_h = d_h
+        self.d_h: int = d_h
 
-    def forward(self, x, mask):
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         # x: batch_size x seq_len x emb_dim
         # Q, K, V: batch_size x seq_len x d_h
         Q = x @ self.W_Q
@@ -54,14 +54,14 @@ class AttentionHead(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, emb_dim: int, num_heads: int):
+    def __init__(self, emb_dim: int, num_heads: int) -> None:
         super().__init__()
         d_h = emb_dim // num_heads
         self.heads = nn.ModuleList([AttentionHead(emb_dim, d_h) for _ in range(num_heads)])
         # learnable projection matrix
         self.W_O = nn.Parameter(torch.empty(emb_dim, emb_dim))
 
-    def forward(self, x: torch.Tensor, mask):
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         # x: batch_size x seq_len x emb_dim
         head_outputs = [head(x, mask) for head in self.heads]
         x = torch.cat(head_outputs, dim=-1)
@@ -69,30 +69,29 @@ class MultiHeadAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, emb_dim: int):
+    def __init__(self, emb_dim: int) -> None:
         super().__init__()
         self.W_1 = nn.Parameter(torch.empty(emb_dim, emb_dim * 4))
         self.B_1 = nn.Parameter(torch.empty(emb_dim * 4))
         self.W_2 = nn.Parameter(torch.empty(emb_dim * 4, emb_dim))
         self.B_2 = nn.Parameter(torch.empty(emb_dim))
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x @ self.W_1 + self.B_1
         x = torch.relu(x)
-        x = x @ self.W_ @ + self.B_2
+        x = x @ self.W_2 + self.B_2
         return x
 
 
 class DecoderBlock(nn.Module):
-    def __init__(self, emb_dim: int, num_heads: int):
+    def __init__(self, emb_dim: int, num_heads: int) -> None:
         super().__init__()
         self.norm1 = RMSNorm(emb_dim)
         self.attn = MultiHeadAttention(emb_dim, num_heads)
         self.norm2 = RMSNorm(emb_dim)
         self.mlp = MLP(emb_dim)
 
-    def forward(self, x: torch.Tensor, mask):
-        super().__init__()
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         attn_out = self.attn(self.norm1(x), mask)
         x = x + attn_out
         mlp_out = self.mlp(self.norm2(x))
@@ -101,22 +100,22 @@ class DecoderBlock(nn.Module):
 
 
 class DecoderLanguageModel(nn.Module):
-    def __init__(self, vocab_size, emb_dim, num_heads, num_blocks, pad_idx):
+    def __init__(self, vocab_size: int, emb_dim: int, num_heads: int, num_blocks: int, pad_idx: int) -> None:
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, emb_dim, padding_idx=pad_idx)
         self.layers = nn.ModuleList([DecoderBlock(emb_dim, num_heads) for _ in range(num_blocks)])
         self.output = nn.Parameter(torch.rand(emb_dim, vocab_size))
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embedding(x)
         _, seq_len, _ = x.shape
         mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device))
         for layer in self.layers:
             x = layer(x, mask)
-        return x @ self.ouput
+        return x @ self.output
 
 
-def rope(x, theta_base=10000.0):
+def rope(x: torch.Tensor, theta_base: float = 10000.0) -> torch.Tensor:
     """
     Implements Rotary Position Embedding (RoPE) for transformer attention.
     RoPE encodes position information through rotation matrices applied to pairs of dimensions.
