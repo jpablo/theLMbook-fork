@@ -4,6 +4,11 @@ import torch
 import torch.nn as nn
 
 
+# Lean 4 pseudo-typing guide for this file
+# variables (B S E H d_h V : Nat)
+# -- E = emb_dim, H = num_heads, d_h = E / H, V = vocab_size
+# -- Tensor B S E denotes torch.Tensor with shape [B, S, E]
+
 class RMSNorm(nn.Module):
     """
     Root Mean Square Layer Normalization
@@ -15,6 +20,8 @@ class RMSNorm(nn.Module):
         self.scale = nn.Parameter(torch.ones(emb_dim))  # Learnable scale parameter
         self.epsilon = epsilon  # Small constant for numerical stability
 
+    # Lean4 (shape):
+    # def forward (x : Tensor B S E) : Tensor B S E
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Compute root mean square normalization
         squared_x = x ** 2
@@ -35,6 +42,15 @@ class AttentionHead(nn.Module):
         self.W_V = nn.Parameter(torch.empty(emb_dim, d_h))
         self.d_h: int = d_h
 
+    # Lean4 (shape):
+    # def forward (x : Tensor B S E) (mask : Tensor S S) : Tensor B S d_h
+    # let Q : Tensor B S d_h := x ⬝ W_Q
+    # let K : Tensor B S d_h := x ⬝ W_K
+    # let V : Tensor B S d_h := x ⬝ W_V
+    # let scores : Tensor B S S := Q ⬝ Kᵀ / √(d_h)
+    # let masked : Tensor B S S := scores ⊙ mask  -- mask broadcast over B
+    # let attn : Tensor B S S := softmax masked
+    # in attn ⬝ V
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         # x: batch_size x seq_len x emb_dim
         # Q, K, V: batch_size x seq_len x d_h
@@ -61,6 +77,11 @@ class MultiHeadAttention(nn.Module):
         # learnable projection matrix
         self.W_O = nn.Parameter(torch.empty(emb_dim, emb_dim))
 
+    # Lean4 (shape):
+    # def forward (x : Tensor B S E) (mask : Tensor S S) : Tensor B S E
+    # let heads : List (Tensor B S d_h) := map (·.forward x mask) self.heads
+    # let concat : Tensor B S (H * d_h) := cat heads  -- H = |self.heads|
+    # in concat ⬝ W_O  -- (H * d_h = E)
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         # x: batch_size x seq_len x emb_dim
         head_outputs = [head(x, mask) for head in self.heads]
@@ -76,6 +97,10 @@ class MLP(nn.Module):
         self.W_2 = nn.Parameter(torch.empty(emb_dim * 4, emb_dim))
         self.B_2 = nn.Parameter(torch.empty(emb_dim))
 
+    # Lean4 (shape):
+    # def forward (x : Tensor B S E) : Tensor B S E
+    # let h : Tensor B S (4*E) := relu (x ⬝ W_1 + B_1)
+    # in h ⬝ W_2 + B_2
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x @ self.W_1 + self.B_1
         x = torch.relu(x)
@@ -91,6 +116,12 @@ class DecoderBlock(nn.Module):
         self.norm2 = RMSNorm(emb_dim)
         self.mlp = MLP(emb_dim)
 
+    # Lean4 (shape):
+    # def forward (x : Tensor B S E) (mask : Tensor S S) : Tensor B S E
+    # let a : Tensor B S E := self.attn (self.norm1 x) mask
+    # let x₁ : Tensor B S E := x + a
+    # let m : Tensor B S E := self.mlp (self.norm2 x₁)
+    # in x₁ + m
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         attn_out = self.attn(self.norm1(x), mask)
         x = x + attn_out
@@ -106,6 +137,12 @@ class DecoderLanguageModel(nn.Module):
         self.layers = nn.ModuleList([DecoderBlock(emb_dim, num_heads) for _ in range(num_blocks)])
         self.output = nn.Parameter(torch.rand(emb_dim, vocab_size))
 
+    # Lean4 (shape):
+    # def forward (tok : Tensor B S) : Tensor B S V
+    # let x : Tensor B S E := embedding tok
+    # let mask : Tensor S S := tril(1)  -- broadcast over B
+    # let y : Tensor B S E := foldl (λ acc blk => blk.forward acc mask) x self.layers
+    # in y ⬝ output  -- projects to V
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embedding(x)
         _, seq_len, _ = x.shape
@@ -116,6 +153,9 @@ class DecoderLanguageModel(nn.Module):
 
 
 def rope(x: torch.Tensor, theta_base: float = 10000.0) -> torch.Tensor:
+    # Lean4 (shape):
+    # def rope (x : Tensor B S E_even) (theta_base : Float := 10000.0) : Tensor B S E_even
+    # split x into x1,x2 : Tensor B S (E/2); rotate pairs with sin/cos; recombine
     """
     Implements Rotary Position Embedding (RoPE) for transformer attention.
     RoPE encodes position information through rotation matrices applied to pairs of dimensions.
