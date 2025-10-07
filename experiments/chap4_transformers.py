@@ -43,30 +43,64 @@ class AttentionHead(nn.Module):
         self.d_h: int = d_h
 
     # Lean4 (shape):
-    # def forward (x : Tensor B S E) (mask : Tensor S S) : Tensor B S d_h
-    # let Q : Tensor B S d_h := x ⬝ W_Q
-    # let K : Tensor B S d_h := x ⬝ W_K
-    # let V : Tensor B S d_h := x ⬝ W_V
-    # let scores : Tensor B S S := Q ⬝ Kᵀ / √(d_h)
-    # let masked : Tensor B S S := scores ⊙ mask  -- mask broadcast over B
-    # let attn : Tensor B S S := softmax masked
-    # in attn ⬝ V
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        # x: batch_size x seq_len x emb_dim
-        # Q, K, V: batch_size x seq_len x d_h
-        Q = x @ self.W_Q
-        K = x @ self.W_K
-        V = x @ self.W_V
+    # def forward (x : Tensor B S E) (mask : Tensor S S) (kv_cache? : Option {k,v}) : Tensor B S d_h
+    # Supports optional KV cache for incremental decoding. When provided, appends
+    # new K/V to the cache and uses all cached keys/values for attention.
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None,
+        kv_cache: dict | None = None,
+    ) -> torch.Tensor:
+        # x: [B, S, E]
+        # project queries/keys/values for the new tokens only
+        Q_new = x @ self.W_Q  # [B, S, d_h]
+        K_new = x @ self.W_K  # [B, S, d_h]
+        V_new = x @ self.W_V  # [B, S, d_h]
 
-        Q, V = rope(Q), rope(V)
-        # attention scores
-        # swaps the last two dims of K: batch_size x d_h x seq_len
-        scores = Q @ K.transpose(-2, -1) / math.sqrt(self.d_h)
-        # apply the causal mask
-        masked_scores = scores.masked_fill(mask == 0, float("-inf"))
+        # Determine how many tokens are already cached (per head)
+        past_len = 0
+        if kv_cache is not None and kv_cache.get("k") is not None:
+            past_len = kv_cache["k"].size(1)
+
+        # Apply RoPE with a position offset to Q and V to match sequence positions
+        # (K remains unrotated here to stay consistent with the existing implementation.)
+        Q_new = rope(Q_new, pos_offset=past_len)
+        V_new = rope(V_new, pos_offset=past_len)
+
+        # Concatenate with cached K/V if provided
+        if kv_cache is not None:
+            if kv_cache.get("k") is not None:
+                K = torch.cat([kv_cache["k"], K_new], dim=1)
+                V = torch.cat([kv_cache["v"], V_new], dim=1)
+            else:
+                K, V = K_new, V_new
+            # Update cache in-place
+            kv_cache["k"], kv_cache["v"] = K, V
+        else:
+            K, V = K_new, V_new
+
+        # Attention scores: Q_new attends over all keys (cached + new)
+        scores = Q_new @ K.transpose(-2, -1) / math.sqrt(self.d_h)  # [B, S, S_total]
+
+        # If a mask is provided and shapes differ (e.g., during cached decoding),
+        # build a correct causal mask for [S_query x S_total].
+        if mask is None or mask.shape[-2] != scores.shape[-2] or mask.shape[-1] != scores.shape[-1]:
+            # Build causal mask that permits attending to all past tokens plus
+            # current position for each query row.
+            B, S_q, S_total = scores.shape
+            device = scores.device
+            # Each row t (0..S_q-1) can attend up to index past_len + t
+            i = (torch.arange(S_q, device=device).unsqueeze(1) + past_len)  # [S_q,1]
+            j = torch.arange(S_total, device=device).unsqueeze(0)  # [1,S_total]
+            causal = (j <= i).to(scores.dtype)  # [S_q,S_total]
+        else:
+            causal = mask.to(scores.dtype)
+
+        masked_scores = scores.masked_fill(causal == 0, float("-inf"))
         attention_weights = torch.softmax(masked_scores, dim=-1)
-        # ^ each row is a probability distribution
-        # output: batch_size x seq_len x d_h
+
+        # output for the new tokens only, using all values
         return attention_weights @ V
 
 
@@ -79,13 +113,17 @@ class MultiHeadAttention(nn.Module):
         self.W_O = nn.Parameter(torch.empty(emb_dim, emb_dim))
 
     # Lean4 (shape):
-    # def forward (x : Tensor B S E) (mask : Tensor S S) : Tensor B S E
-    # let heads : List (Tensor B S d_h) := map (·.forward x mask) self.heads
-    # let concat : Tensor B S (H * d_h) := cat heads  -- H = |self.heads|
-    # in concat ⬝ W_O  -- (H * d_h = E)
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        # x: batch_size x seq_len x emb_dim
-        head_outputs = [head(x, mask) for head in self.heads]
+    # def forward (x : Tensor B S E) (mask : Tensor S S) (kv_cache? : Option (Array H {k,v})) : Tensor B S E
+    # Each head receives its own optional cache dict {k,v}.
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None, kv_cache: list | None = None) -> torch.Tensor:
+        # x: [B, S, E]
+        head_outputs = []
+        for i, head in enumerate(self.heads):
+            cache_i = None
+            if kv_cache is not None:
+                # Expect a list of length num_heads containing dicts for 'k'/'v'
+                cache_i = kv_cache[i]
+            head_outputs.append(head(x, mask, kv_cache=cache_i))
         x = torch.cat(head_outputs, dim=-1)
         return x @ self.W_O
 
@@ -118,13 +156,11 @@ class DecoderBlock(nn.Module):
         self.mlp = MLP(emb_dim)
 
     # Lean4 (shape):
-    # def forward (x : Tensor B S E) (mask : Tensor S S) : Tensor B S E
-    # let a : Tensor B S E := self.attn (self.norm1 x) mask
-    # let x₁ : Tensor B S E := x + a
-    # let m : Tensor B S E := self.mlp (self.norm2 x₁)
-    # in x₁ + m
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        attn_out = self.attn(self.norm1(x), mask)
+    # def forward (x : Tensor B S E) (mask : Tensor S S) (kv_cache? : Option (Array H {k,v})) : Tensor B S E
+    # let a := attn (norm1 x) mask kv_cache
+    # let x₁ := x + a; in x₁ + mlp (norm2 x₁)
+    def forward(self, x: torch.Tensor, mask: torch.Tensor | None, kv_cache: list | None = None) -> torch.Tensor:
+        attn_out = self.attn(self.norm1(x), mask, kv_cache=kv_cache)
         x = x + attn_out
         mlp_out = self.mlp(self.norm2(x))
         x = x + mlp_out
@@ -140,20 +176,30 @@ class DecoderLanguageModel(nn.Module):
 
     # Lean4 (shape):
     # def forward (tok : Tensor B S) : Tensor B S V
-    # let x : Tensor B S E := embedding tok
-    # let mask : Tensor S S := tril(1)  -- broadcast over B
-    # let y : Tensor B S E := foldl (λ acc blk => blk.forward acc mask) x self.layers
-    # in y ⬝ output  -- projects to V
+    # Training path (no cache): regular causal mask.
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embedding(x)
         _, seq_len, _ = x.shape
         mask = torch.tril(torch.ones(seq_len, seq_len, device=x.device))
         for layer in self.layers:
-            x = layer(x, mask)
+            x = layer(x, mask, kv_cache=None)
+        return x @ self.output
+
+    # Incremental path with KV cache. Expects `kv_caches` to be a list with one
+    # element per decoder block; each element is a list (len=num_heads) of dicts
+    # with optional 'k'/'v' tensors. Pass only the new tokens in `x`.
+    @torch.no_grad()
+    def forward_with_cache(self, x: torch.Tensor, kv_caches: list[list[dict]]) -> torch.Tensor:
+        # x: [B, S_new] token ids
+        x = self.embedding(x)  # [B,S_new,E]
+        # Build a causal mask for [S_new x (past+S_new)] on the fly in heads
+        mask = None  # constructed per-head based on cache lengths
+        for layer, cache_for_layer in zip(self.layers, kv_caches):
+            x = layer(x, mask, kv_cache=cache_for_layer)
         return x @ self.output
 
 
-def rope(x: torch.Tensor, theta_base: float = 10000.0) -> torch.Tensor:
+def rope(x: torch.Tensor, theta_base: float = 10000.0, pos_offset: int = 0) -> torch.Tensor:
     # Lean4 (shape):
     # def rope (x : Tensor B S E_even) (theta_base : Float := 10000.0) : Tensor B S E_even
     # split x into x1,x2 : Tensor B S (E/2); rotate pairs with sin/cos; recombine
@@ -171,8 +217,8 @@ def rope(x: torch.Tensor, theta_base: float = 10000.0) -> torch.Tensor:
     batch_size, seq_len, emb_dim = x.size()
     assert emb_dim % 2 == 0, "Embedding dimensionality must be even for RoPE"
 
-    # Generate sequence position indices
-    pos = torch.arange(0, seq_len, dtype=torch.float32, device=x.device)
+    # Generate sequence position indices with optional offset
+    pos = torch.arange(pos_offset, pos_offset + seq_len, dtype=torch.float32, device=x.device)
     pos = pos.unsqueeze(0).expand(batch_size, seq_len)
 
     # Compute frequency bands for each dimension pair
