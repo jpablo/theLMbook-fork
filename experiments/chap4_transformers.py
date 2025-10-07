@@ -37,9 +37,9 @@ class RMSNorm(nn.Module):
 class AttentionHead(nn.Module):
     def __init__(self, emb_dim: int, d_h: int) -> None:
         super().__init__()
-        self.W_Q = nn.Parameter(torch.empty(emb_dim, d_h))
-        self.W_K = nn.Parameter(torch.empty(emb_dim, d_h))
-        self.W_V = nn.Parameter(torch.empty(emb_dim, d_h))
+        self.W_Q = nn.Parameter(torch.eye(emb_dim, d_h))
+        self.W_K = nn.Parameter(torch.eye(emb_dim, d_h))
+        self.W_V = nn.Parameter(torch.eye(emb_dim, d_h))
         self.d_h: int = d_h
 
     # Lean4 (shape):
@@ -65,6 +65,7 @@ class AttentionHead(nn.Module):
         # apply the causal mask
         masked_scores = scores.masked_fill(mask == 0, float("-inf"))
         attention_weights = torch.softmax(masked_scores, dim=-1)
+        # ^ each row is a probability distribution
         # output: batch_size x seq_len x d_h
         return attention_weights @ V
 
